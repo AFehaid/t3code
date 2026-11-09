@@ -141,6 +141,17 @@ function cursorUsageWindowRank(id: string): number {
   return rank < 0 ? CURSOR_USAGE_WINDOWS.length : rank;
 }
 
+/** Registry instances run different agents, so each one's limits stand alone. */
+function usageLimitGroup(
+  driver: ServerProvider["driver"],
+  instanceId: ProviderInstanceId | undefined,
+): string {
+  return driver === "acpRegistry" && instanceId !== undefined ? `${driver}:${instanceId}` : driver;
+}
+
+const providerLimitGroup = (provider: Pick<ServerProvider, "driver" | "instanceId">) =>
+  usageLimitGroup(provider.driver, provider.instanceId);
+
 function providersWithLimits(providers: readonly ServerProvider[]): readonly ServerProvider[] {
   return providers.filter(
     (provider) =>
@@ -235,9 +246,17 @@ function accountKeyResolver(reports: Iterable<AccountReport>) {
 
 const hubAccountName = (account: { readonly id: string }) => account.id.replace(/\.json$/i, "");
 
+/** A registry agent, which its driver does not name. */
+export interface LimitAgent {
+  readonly instanceId: ProviderInstanceId;
+  readonly label: string;
+  readonly iconUrl: string | undefined;
+}
+
 export interface LimitAccount {
   readonly key: string;
   readonly driver: ServerProvider["driver"];
+  readonly agent?: LimitAgent | undefined;
   readonly displayName: string | null;
   readonly email: string | undefined;
   readonly plan: string | undefined;
@@ -342,6 +361,15 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
       merge(resolveKey(nativeReport(provider)) ?? `${environmentId}:${provider.instanceId}`, {
         key: `${environmentId}:${provider.instanceId}`,
         driver: provider.driver,
+        ...(provider.driver === "acpRegistry"
+          ? {
+              agent: {
+                instanceId: provider.instanceId,
+                label: provider.displayName?.trim() || provider.instanceId,
+                iconUrl: provider.iconUrl,
+              },
+            }
+          : {}),
         displayName: provider.displayName?.trim() || null,
         email: provider.auth.email,
         plan: provider.auth.label,
@@ -437,7 +465,9 @@ export interface LimitPoolWindow {
 }
 
 export interface LimitPool {
+  readonly group: string;
   readonly driver: ServerProvider["driver"];
+  readonly agent: LimitAgent | undefined;
   readonly accounts: readonly LimitAccount[];
   readonly windows: readonly LimitPoolWindow[];
 }
@@ -473,13 +503,15 @@ export function collectLimitPools(
   accounts: readonly LimitAccount[],
   now: number,
 ): readonly LimitPool[] {
-  const byDriver = new Map<ServerProvider["driver"], LimitAccount[]>();
+  const byGroup = new Map<string, LimitAccount[]>();
   for (const account of accounts) {
-    const list = byDriver.get(account.driver);
+    const group = usageLimitGroup(account.driver, account.agent?.instanceId);
+    const list = byGroup.get(group);
     if (list) list.push(account);
-    else byDriver.set(account.driver, [account]);
+    else byGroup.set(group, [account]);
   }
-  return [...byDriver].map(([driver, members]) => {
+  return [...byGroup].map(([group, members]) => {
+    const { driver, agent } = members[0]!;
     const orderWindow = members
       .flatMap((account) => account.limits.windows)
       .sort((left, right) => WINDOW_KIND_ORDER[left.kind] - WINDOW_KIND_ORDER[right.kind])[0];
@@ -498,7 +530,7 @@ export function collectLimitPools(
         accountSortName(left).localeCompare(accountSortName(right)) ||
         left.key.localeCompare(right.key),
     );
-    return { driver, accounts: sorted, windows: poolWindows(sorted, now) };
+    return { group, driver, agent, accounts: sorted, windows: poolWindows(sorted, now) };
   });
 }
 
@@ -693,15 +725,16 @@ export function isUsageLimitsCommand(prompt: string): boolean {
 }
 
 export function hasProviderUsageLimits(
-  driver: ServerProvider["driver"],
+  selected: Pick<ServerProvider, "driver" | "instanceId">,
   providers: readonly ServerProvider[],
   sources: UsageLimitSourceSnapshots,
 ): boolean {
+  const group = providerLimitGroup(selected);
   return (
-    providersWithLimits(providers).some((provider) => provider.driver === driver) ||
+    providersWithLimits(providers).some((provider) => providerLimitGroup(provider) === group) ||
     sources.some(
       (source) =>
-        source.accounts.some((account) => account.driver === driver) ||
+        source.accounts.some((account) => account.driver === group) ||
         (source.error !== undefined && source.accounts.length === 0),
     )
   );
@@ -729,15 +762,15 @@ export function withUsageLimitsCommands(
   providers: readonly ServerProvider[],
   sources: UsageLimitSourceSnapshots,
 ): ServerProvider[] {
-  const supportedDrivers = new Set([
-    ...providersWithLimits(providers).map((provider) => provider.driver),
+  const supportedGroups = new Set<string>([
+    ...providersWithLimits(providers).map(providerLimitGroup),
     ...sources.flatMap((source) => source.accounts.map((account) => account.driver)),
   ]);
   const unreadableSource = sources.some(
     (source) => source.error !== undefined && source.accounts.length === 0,
   );
   return providers.map((provider) => {
-    if (!unreadableSource && !supportedDrivers.has(provider.driver)) return provider;
+    if (!unreadableSource && !supportedGroups.has(providerLimitGroup(provider))) return provider;
     const commands = (items: readonly ServerProviderSlashCommand[]) => [
       ...items.filter((command) => command.name !== USAGE_LIMITS_COMMAND.name),
       USAGE_LIMITS_COMMAND,
@@ -764,7 +797,7 @@ export function collectProviderUsageLimits(
   now: number,
 ): UsageLimitsReport | null {
   const selected = providers.find((provider) => provider.instanceId === instanceId);
-  if (!selected || !hasProviderUsageLimits(selected.driver, providers, sources)) return null;
+  if (!selected || !hasProviderUsageLimits(selected, providers, sources)) return null;
   const resolveKey = accountKeyResolver([
     ...providers.filter((provider) => provider.enabled).map(nativeReport),
     ...sources.flatMap((source) => source.accounts),
@@ -775,7 +808,9 @@ export function collectProviderUsageLimits(
     { usage: NativeSnapshot; credits: NativeSnapshot | null }
   >();
   for (const provider of providersWithLimits(providers)) {
-    if (provider.driver !== selected.driver || !provider.usageLimits) continue;
+    if (providerLimitGroup(provider) !== providerLimitGroup(selected) || !provider.usageLimits) {
+      continue;
+    }
     const snapshot = { provider, limits: provider.usageLimits };
     const key = resolveKey(nativeReport(provider)) ?? `instance:${provider.instanceId}`;
     const previous = nativeByAccount.get(key);

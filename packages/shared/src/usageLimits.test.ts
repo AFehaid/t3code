@@ -723,6 +723,37 @@ describe("pools", () => {
     ]);
   });
 
+  it("keeps each registry agent's limits apart, named by its instance", () => {
+    const registry = (id: string, displayName: string) =>
+      provider({
+        instanceId: ProviderInstanceId.make(id),
+        driver: ProviderDriverKind.make("acpRegistry"),
+        displayName,
+        iconUrl: `https://icons.example.com/${id}.svg`,
+        usageLimits: { checkedAt, windows: [{ ...weekly, kind: "monthly", usedPercent: 25 }] },
+      });
+    const input = new Map([
+      [
+        EnvironmentId.make("env-a"),
+        {
+          ...laptop,
+          serverConfig: {
+            providers: [registry("copilot", "Copilot"), registry("copilot_work", "Copilot Work")],
+            usageLimitSources: [],
+          },
+        },
+      ],
+    ]);
+    expect(collectLimitPools(collectLimitAccounts(input), now).map((pool) => pool.agent)).toEqual([
+      { instanceId: "copilot", label: "Copilot", iconUrl: "https://icons.example.com/copilot.svg" },
+      {
+        instanceId: "copilot_work",
+        label: "Copilot Work",
+        iconUrl: "https://icons.example.com/copilot_work.svg",
+      },
+    ]);
+  });
+
   it("pools Codex windows by kind, whichever slot reported them", () => {
     const codexAccount = (id: string, slots: readonly string[]) => ({
       id,
@@ -1423,6 +1454,22 @@ describe("/usage-limits", () => {
     ]);
     expect(mixed[2]).toBe(unrelated);
     expect(mixed[3]).toBe(disabled);
+    // Registry instances run different agents, so one agent's limits cover only itself.
+    const registry = ProviderDriverKind.make("acpRegistry");
+    const copilot = provider({
+      instanceId: ProviderInstanceId.make("copilot"),
+      driver: registry,
+      usageLimits: limits,
+    });
+    const otherAgent = provider({ instanceId: ProviderInstanceId.make("other"), driver: registry });
+    expect(
+      withUsageLimitsCommands([copilot, otherAgent], []).map((entry) =>
+        entry.slashCommands.map((command) => command.name),
+      ),
+    ).toEqual([["usage-limits"], []]);
+    expect(collectProviderUsageLimits(otherAgent.instanceId, [copilot, otherAgent], [], now)).toBe(
+      null,
+    );
   });
 });
 

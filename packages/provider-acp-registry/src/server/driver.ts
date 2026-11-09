@@ -57,6 +57,8 @@ import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpRegistryAuth from "./auth.ts";
 import * as AcpRegistryAuthenticationState from "./authenticationState.ts";
+import { isCopilotAgent } from "./copilotAcp.ts";
+import { readCopilotUsageLimits } from "./copilotUsageLimits.ts";
 
 const DRIVER_KIND = ProviderDriverKind.make("acpRegistry");
 const decodeSettings = Schema.decodeSync(AcpRegistrySettings);
@@ -502,6 +504,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
     }
     const random = yield* SecureRandom.SecureRandom;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const digest = yield* Digest.Digest;
     const hostEnvironment = yield* HostProcess.Environment;
     const host = yield* ProviderHost.ProviderHost;
     const continuationIdentity = defaultProviderContinuationIdentity({
@@ -583,10 +586,33 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
             }),
           );
     });
-    const checkProvider = checkAcpRegistryProviderReadiness(readinessInput).pipe(
+    const checkReadiness = checkAcpRegistryProviderReadiness(readinessInput).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
       Effect.flatMap(withLiveRuntimeState),
     );
+    const readUsageLimits = readCopilotUsageLimits(
+      catalog
+        .resolve(effectiveConfig, host.paths.cwd, processEnvironment)
+        .pipe(Effect.map((resolved) => resolved.spawn)),
+    ).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provideService(Digest.Digest, digest),
+    );
+    const checkProvider = isCopilotAgent(effectiveConfig)
+      ? checkReadiness.pipe(
+          Effect.filterOrElse(
+            (provider) =>
+              !(
+                provider.enabled &&
+                provider.installed &&
+                provider.status === "ready" &&
+                provider.auth.status !== "unauthenticated"
+              ),
+            (provider) =>
+              readUsageLimits.pipe(Effect.map((usageLimits) => ({ ...provider, usageLimits }))),
+          ),
+        )
+      : checkReadiness;
     const enrichProvider = checkAcpRegistryProviderStatus(
       {
         ...readinessInput,
@@ -650,7 +676,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       getSettings: snapshotSettings.getSettings,
       streamSettings: snapshotSettings.streamSettings,
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
-      initialSnapshot: () => checkProvider,
+      initialSnapshot: () => checkReadiness,
       checkProvider,
       enrichSnapshot: Effect.fn("enrichSnapshot")(function ({
         snapshot,

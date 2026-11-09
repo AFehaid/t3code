@@ -165,6 +165,10 @@ Grok reports the remaining subscription allowance and reset time for its current
 after signing in with `grok login`. Explicit `XAI_API_KEY` connections and custom authentication
 or endpoint configurations do not report subscription limits.
 
+GitHub Copilot, added from the [ACP Registry](./providers-acp.md), reports the monthly premium
+request allowance of the account signed in to Copilot CLI. Plans billed by token show it as AI
+credits. Limits shows each ACP agent under its own name.
+
 API-key accounts may not report subscription limits. This also applies to Claude connections
 using a proxy through `ANTHROPIC_AUTH_TOKEN`.
 
