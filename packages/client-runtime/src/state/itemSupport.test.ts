@@ -10,12 +10,17 @@ import {
   RuntimeRequestId,
   TurnItemId,
   type OrchestrationV2TurnItem,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
 import { v2Projection, v2ThreadId } from "./orchestrationV2TestFixtures.ts";
-import { resolveV2ItemSupport } from "./itemSupport.ts";
+import {
+  resolveReportedModelLabels,
+  resolveV2ItemSupport,
+  type V2ItemSupport,
+} from "./itemSupport.ts";
 
 const now = DateTime.makeUnsafe("2026-06-20T00:00:00.000Z");
 const runId = RunId.make("run-1");
@@ -187,5 +192,40 @@ describe("resolveV2ItemSupport", () => {
       ],
     };
     expect(resolveV2ItemSupport(projection, itemId).item).toBe(commandItem);
+  });
+});
+
+describe("resolveReportedModelLabels", () => {
+  const instanceId = ProviderInstanceId.make("copilot");
+  const providers = [
+    {
+      instanceId,
+      driver: ProviderDriverKind.make("acpRegistry"),
+      models: [
+        { slug: "auto", name: "Auto" },
+        { slug: "gpt-6-luna", name: "GPT-6 Luna" },
+        { slug: "claude-sonnet-5.5", name: "Claude Sonnet 5.5", aliases: ["sonnet"] },
+      ],
+    },
+  ] as unknown as ReadonlyArray<ServerProvider>;
+  const support = (selected: string, reported: string | undefined) =>
+    ({
+      run: { modelSelection: { instanceId, model: selected } },
+      providerTurn: reported === undefined ? {} : { model: reported },
+    }) as unknown as Pick<V2ItemSupport, "run" | "providerTurn">;
+
+  const auto = { label: "Auto", name: "Auto" };
+  it.each([
+    ["auto", "gpt-6-luna", { selected: auto, reported: { label: "6 Luna", name: "GPT-6 Luna" } }],
+    [
+      "auto",
+      "gpt-7-nova",
+      { selected: auto, reported: { label: "GPT-7-Nova", name: "GPT-7-Nova" } },
+    ],
+    ["auto", undefined, null],
+    ["claude-sonnet-5.5", "claude-sonnet-5.5", null],
+    ["claude-sonnet-5.5", "sonnet", null],
+  ])("selected %s, reported %s", (selected, reported, expected) => {
+    expect(resolveReportedModelLabels(support(selected, reported), providers)).toEqual(expected);
   });
 });

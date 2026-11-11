@@ -1,4 +1,11 @@
-import type { OrchestrationV2ThreadProjection, TurnItemId } from "@t3tools/contracts";
+import type {
+  OrchestrationV2ThreadProjection,
+  ServerProvider,
+  TurnItemId,
+} from "@t3tools/contracts";
+import { formatModelSlugName, resolveSelectableModel } from "@t3tools/shared/model";
+
+import { resolveModelShortName } from "../providerClients.ts";
 
 type Projection = OrchestrationV2ThreadProjection;
 
@@ -109,6 +116,34 @@ export function resolveV2ItemSupport(projection: Projection, itemId: TurnItemId)
     contextHandoff,
     contextTransfer,
   };
+}
+
+export interface ReportedModelLabel {
+  /** Compact, as the model picker's trigger shows it. */
+  readonly label: string;
+  readonly name: string;
+}
+
+/** Labels for a turn whose provider reported running another model than its run selected. */
+export function resolveReportedModelLabels(
+  support: Pick<V2ItemSupport, "run" | "providerTurn">,
+  providers: ReadonlyArray<ServerProvider>,
+): { readonly selected: ReportedModelLabel; readonly reported: ReportedModelLabel } | null {
+  const reported = support.providerTurn?.model;
+  const selection = support.run?.modelSelection;
+  if (reported === undefined || selection === undefined) return null;
+  const provider = providers.find((candidate) => candidate.instanceId === selection.instanceId);
+  const resolve = (value: string) => {
+    const slug =
+      (provider ? resolveSelectableModel(provider.driver, value, provider.models) : null) ?? value;
+    const model = provider?.models.find((candidate) => candidate.slug === slug);
+    const name = model?.name ?? formatModelSlugName(value);
+    const label = (model && resolveModelShortName(model, provider?.driver)) ?? name;
+    return { slug, display: { label, name } };
+  };
+  const selected = resolve(selection.model);
+  const ran = resolve(reported);
+  return selected.slug === ran.slug ? null : { selected: selected.display, reported: ran.display };
 }
 
 function sameEntities<A>(left: ReadonlyArray<A>, right: ReadonlyArray<A>): boolean {

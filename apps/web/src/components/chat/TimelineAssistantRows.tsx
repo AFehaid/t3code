@@ -1,5 +1,7 @@
+import { useAtomValue } from "@effect/atom-react";
 import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
 import { type RunId } from "@t3tools/contracts";
+import { resolveReportedModelLabels } from "@t3tools/client-runtime/state/item-support";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import { memo, use, useState } from "react";
 import { type ChatMessage, type TurnDiffSummary } from "../../types";
@@ -20,6 +22,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
 import { useUiStateStore } from "~/uiStateStore";
 import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
+import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useV2ItemSupport } from "../../state/v2ItemSupport";
 import { TimelineRowCtx, TimelineRowActivityCtx, type TimelineRow } from "./timelineRowContext";
 import { MESSAGE_HEADING_LEVEL, MessageAuthorHeading } from "./TimelineRowParts";
@@ -200,7 +203,39 @@ function AssistantMessageMeta({
           </TooltipPopup>
         </Tooltip>
       )}
+      {!message.streaming && projectedItem ? (
+        <AssistantReportedModel projectedItem={projectedItem} />
+      ) : null}
     </div>
+  );
+}
+
+function AssistantReportedModel({
+  projectedItem,
+}: {
+  readonly projectedItem: NonNullable<Extract<TimelineRow, { kind: "message" }>["projectedItem"]>;
+}) {
+  const ctx = use(TimelineRowCtx);
+  const support = useV2ItemSupport({
+    environmentId: ctx.activeThreadEnvironmentId,
+    sourceThreadId: projectedItem.sourceThreadId,
+    sourceItemId: projectedItem.sourceItemId,
+  });
+  const providers =
+    useAtomValue(serverEnvironment.providersValueAtom(ctx.activeThreadEnvironmentId)) ??
+    EMPTY_SERVER_PROVIDERS;
+  const labels = resolveReportedModelLabels(support, providers);
+  if (labels === null) return null;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<p className="min-w-0 truncate text-muted-foreground text-xs" />}>
+        {labels.selected.label} → {labels.reported.label}
+      </TooltipTrigger>
+      <TooltipPopup>
+        Selected {labels.selected.name}; the provider ran {labels.reported.name}.
+      </TooltipPopup>
+    </Tooltip>
   );
 }
 

@@ -231,6 +231,11 @@ export interface AcpAdapterV2ExtensionContext {
   >;
   readonly captureProposedPlan: (input: { readonly planMarkdown: string }) => Effect.Effect<void>;
   readonly lastProposedPlanMarkdown: Effect.Effect<string | undefined>;
+  /** Records the model the agent reported running the active turn's root agent. */
+  readonly reportTurnModel: (input: {
+    readonly sessionId: string;
+    readonly model: string;
+  }) => Effect.Effect<void>;
 }
 
 /**
@@ -1406,6 +1411,8 @@ interface ActiveAcpTurn {
   /** Completed when an update after dispatch matches `cancelAfterPromptStarts.isStart`. */
   readonly promptStarted: Deferred.Deferred<void, never>;
   promptUsage: EffectAcpSchema.Usage | undefined;
+  /** The model the agent reported running the root agent, which can differ from the selection. */
+  executedModel: string | undefined;
   backgroundFinalizeGeneration: number;
   /** The agent's own id for this turn's prompt, from `forkFromTurn.nativeTurnId`. */
   nativePromptId: string | undefined;
@@ -6806,6 +6813,22 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               requestUserInput,
               captureProposedPlan,
               lastProposedPlanMarkdown,
+              reportTurnModel: (notice) =>
+                runRuntimeCallbackAtGeneration(
+                  handlerGeneration,
+                  Effect.gen(function* () {
+                    const context = yield* Ref.get(activeTurn);
+                    const model = notice.model.trim();
+                    if (
+                      context === null ||
+                      context.finalized ||
+                      context.nativeThreadId !== notice.sessionId ||
+                      model.length === 0
+                    )
+                      return;
+                    context.executedModel = model;
+                  }),
+                ).pipe(Effect.asVoid),
               finishSubagent: (notice) =>
                 runRuntimeCallbackAtGeneration(
                   handlerGeneration,
@@ -7512,6 +7535,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           status,
           startedAt: context.startedAt,
           completedAt,
+          ...(context.executedModel === undefined ? {} : { model: context.executedModel }),
           ...(status === "running" || status === "pending"
             ? {}
             : {
@@ -8209,6 +8233,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               promptSentAt: null,
               promptStarted,
               promptUsage: undefined,
+              executedModel: undefined,
               backgroundFinalizeGeneration: 0,
               nativePromptId: undefined,
               lastProgressAt: 0,

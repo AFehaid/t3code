@@ -21,6 +21,7 @@ export const copilotClientCapabilitiesMeta = {
       "subagent.failed",
       "assistant.message_delta",
       "assistant.reasoning_delta",
+      "assistant.usage",
     ],
   },
 };
@@ -95,6 +96,14 @@ export function makeCopilotSubagentRouting() {
             ...(task === undefined ? {} : { task }),
           };
           return Effect.void;
+        }
+        case "assistant.usage": {
+          // Auto does not announce its pick (session.auto_mode_resolved) on every prompt,
+          // so read the model from the usage every root-agent model call reports.
+          if (event.agentId !== undefined || task !== undefined || typeof data.model !== "string") {
+            return Effect.void;
+          }
+          return context.reportTurnModel({ sessionId: event.sessionId, model: data.model });
         }
         case "subagent.started": {
           if (event.agentId !== undefined && typeof data.toolCallId === "string") {

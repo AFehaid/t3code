@@ -2869,7 +2869,7 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  it.effect("routes interleaved Copilot subagent output into subagent threads", () =>
+  it.effect("routes interleaved Copilot subagent output and records the root agent's model", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const path = yield* Path.Path;
@@ -2947,6 +2947,7 @@ describe("AcpAdapterV2", () => {
                   yield* launch("task-a", "Describe a.txt", "sync");
                   yield* launch("task-b", "Describe b.txt", "sync");
                   yield* launch("task-bg", "List directory", "background");
+                  yield* raw("assistant.usage", { model: "gpt-6-luna" });
                   yield* raw("subagent.started", { toolCallId: "task-a" }, "agent-a");
                   yield* raw("subagent.started", { toolCallId: "task-b" }, "agent-b");
                   yield* raw("subagent.started", { toolCallId: "task-bg" }, "agent-bg");
@@ -2970,6 +2971,7 @@ describe("AcpAdapterV2", () => {
                   yield* chunk(" hello.", "task-a");
                   yield* chunk("a.txt b.txt", "task-bg");
                   yield* chunk(" three lines.", "task-b");
+                  yield* raw("assistant.usage", { model: "claude-haiku-4.5" }, "agent-a");
                   for (const [task, agent, text] of [
                     ["task-a", "agent-a", "`a.txt` says hello."],
                     ["task-b", "agent-b", "`b.txt` has three lines."],
@@ -3064,6 +3066,10 @@ describe("AcpAdapterV2", () => {
       assert.isFalse(
         items.some((item) => item.threadId === threadId && item.type === "dynamic_tool"),
       );
+      const turnModels = events.flatMap((event) =>
+        event.type === "provider_turn.updated" ? [event.providerTurn.model] : [],
+      );
+      assert.equal(turnModels.at(-1), "gpt-6-luna");
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 

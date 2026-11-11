@@ -40,6 +40,8 @@ import {
   resolveUserMessageFileCards,
   resolveUserMessagePresentation,
 } from "@t3tools/client-runtime/user-message";
+import { useAtomValue } from "@effect/atom-react";
+import { resolveReportedModelLabels } from "@t3tools/client-runtime/state/item-support";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
@@ -377,6 +379,30 @@ function UserMessageCopyButton(props: {
     >
       {button}
     </Menu>
+  );
+}
+
+function AssistantReportedModel(props: {
+  readonly environmentId: EnvironmentId;
+  readonly projectedItem: OrchestrationV2ProjectedTurnItem;
+}) {
+  const support = useV2ItemSupport({
+    environmentId: props.environmentId,
+    sourceThreadId: props.projectedItem.sourceThreadId,
+    sourceItemId: props.projectedItem.sourceItemId,
+  });
+  const providers = useAtomValue(serverEnvironment.providersValueAtom(props.environmentId)) ?? [];
+  const labels = resolveReportedModelLabels(support, providers);
+  if (labels === null) return null;
+
+  return (
+    <Text
+      accessibilityLabel={`Selected ${labels.selected.name}; the provider ran ${labels.reported.name}`}
+      className="shrink font-t3-medium text-xs text-foreground-secondary"
+      numberOfLines={1}
+    >
+      {labels.selected.label} → {labels.reported.label}
+    </Text>
   );
 }
 
@@ -2278,6 +2304,12 @@ function renderFeedEntry(
             <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
               {timestampLabel}
             </Text>
+            {message.projectedItem ? (
+              <AssistantReportedModel
+                environmentId={props.environmentId}
+                projectedItem={message.projectedItem}
+              />
+            ) : null}
           </View>
         ) : null}
       </Animated.View>
